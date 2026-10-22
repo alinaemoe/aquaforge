@@ -1,0 +1,9 @@
+node_modules
+dist
+
+# secrets / local tooling
+.env
+.env.*
+!.env.example
+.claude/
+
