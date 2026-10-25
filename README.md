@@ -10,6 +10,14 @@ fly-through and export the result as heightmaps and meshes.
 
 > Needs a browser with WebGPU (Chrome or Edge).
 
+<p align="center"><img src="docs/screenshots/erosion.gif" alt="Rain carves a procedurally generated island in real time" width="100%"></p>
+
+<p align="center"><sub>Real-time capture: 512x512 grid, ~2,500 simulation steps per second on an integrated GPU, slow camera orbit while rain erodes the island.</sub></p>
+
+| Before / After split view | Erosion heat overlay | Rock strata (Geology view) |
+|---|---|---|
+| ![Original terrain on the left, eroded terrain on the right](docs/screenshots/before-after.png) | ![Red: material washed out, blue: deposited](docs/screenshots/erosion-overlay.png) | ![Four rock types as tilted layers: soft layers wash out first](docs/screenshots/geology.png) |
+
 ## Features
 
 - **GPU erosion.** Grid shallow-water simulation (virtual pipes, after Mei et al. 2007) with
