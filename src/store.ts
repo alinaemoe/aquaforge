@@ -117,6 +117,7 @@ export interface FxParams {
   fog: number; // плотность тумана
   bloom: number; // сила bloom
   tod: number; // время суток 0..1 (рассвет → закат)
+  trees: number; // плотность деревьев 0..1.5
 }
 
 export const YEARS_PER_STEP = 50;
@@ -181,7 +182,7 @@ export const useStore = create<State>((set) => ({
   sim: DEFAULT_SIM,
   geo: DEFAULT_GEO,
   climate: 'temperate',
-  fx: { fog: 0.0035, bloom: 0.6, tod: 0.35 },
+  fx: { fog: 0.0035, bloom: 0.6, tod: 0.35, trees: 1 },
   setClimate: (climate) => set({ climate }),
   setFx: (k, v) => set((s) => ({ fx: { ...s.fx, [k]: v } })),
   story: [],

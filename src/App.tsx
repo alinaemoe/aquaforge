@@ -265,6 +265,59 @@ export default function App() {
       case 'meta': saveBlob(metaJSON(st, hs), `aquaforge-meta-${stamp}.json`); break;
     }
   };
+  const [hover, setHover] = useState('');
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const r = rendererRef.current;
+      if (!r) return;
+      const h = r.hover();
+      const st = useStore.getState();
+      const txt = h.valid
+        ? `h ≈ ${Math.round(h.h * st.params.heightScale * 40)} м · ${h.h > st.params.seaLevel ? 'суша' : 'море'}`
+        : '';
+      setHover((p) => (p === txt ? p : txt));
+    }, 120);
+    return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    const ids: Tool[] = ['orbit', 'rain', 'raise', 'lower', 'river', 'dam'];
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' && (el as HTMLInputElement).type !== 'range' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const st = useStore.getState();
+      if (e.code === 'Space') {
+        e.preventDefault();
+        st.setRunning(!st.running);
+      } else if (e.key === 'r' || e.key === 'R') {
+        st.setRunning(false);
+        rendererRef.current?.generate(st.params);
+      } else if (e.key >= '1' && e.key <= '6') {
+        st.setTool(ids[+e.key - 1]);
+      } else if (e.key === '[') {
+        st.setToolParam('radius', Math.max(1, st.toolParams.radius - 1));
+      } else if (e.key === ']') {
+        st.setToolParam('radius', Math.min(20, st.toolParams.radius + 1));
+      } else if (e.key === 'h' || e.key === 'H') {
+        document.querySelector('.panel')?.classList.toggle('hidden');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const toggleSection = (e: React.MouseEvent) => {
+    const h = e.target as HTMLElement;
+    if (h.tagName !== 'H3') return;
+    const closed = h.classList.toggle('closed');
+    let n = h.nextElementSibling;
+    while (n && n.tagName !== 'H3') {
+      n.classList.toggle('folded', closed);
+      n = n.nextElementSibling;
+    }
+  };
+
   const reset = () => {
     s.setRunning(false);
     rendererRef.current?.generate(useStore.getState().params);
@@ -274,7 +327,7 @@ export default function App() {
     <div className="app">
       <canvas ref={canvasRef} className="viewport" />
 
-      <aside className="panel left">
+      <aside className="panel left" onClick={toggleSection}>
         <h1>AQUAFORGE</h1>
         <p className="sub">Phase 1 · grid hydraulic erosion</p>
 
@@ -317,6 +370,11 @@ export default function App() {
           sl={{ key: 'fog', label: 'Fog density', min: 0, max: 0.015, step: 0.0005, digits: 4 } as Slider<{ fog: number }>}
           value={fx.fog}
           onChange={(v) => s.setFx('fog', v)}
+        />
+        <SliderRow
+          sl={{ key: 'trees', label: 'Forest density', min: 0, max: 1.5, step: 0.05, digits: 2 } as Slider<{ trees: number }>}
+          value={fx.trees}
+          onChange={(v) => s.setFx('trees', v)}
         />
         <SliderRow
           sl={{ key: 'bloom', label: 'Bloom', min: 0, max: 2, step: 0.05, digits: 2 } as Slider<{ bloom: number }>}
@@ -554,6 +612,7 @@ export default function App() {
         </div>
       )}
 
+      {hover && <div className="hover">{hover}</div>}
       <div className="hud">{ready ? `${fps} FPS · ${sps.toLocaleString('ru-RU')} шагов/с · 512²` : ''}</div>
 
       {(gpuStatus === 'unsupported' || gpuStatus === 'error') && (

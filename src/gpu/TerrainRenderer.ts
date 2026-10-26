@@ -26,6 +26,7 @@ const WG8 = GRID / 8; // генерация шума: 8×8
 const FOV = Math.PI / 4;
 const MAX_SOURCES = 8;
 
+const TREE_CANDIDATES = 90000; // инстансов-кандидатов; живые выбираются в вершинном шейдере
 const SCENE_FMT: GPUTextureFormat = 'rgba16float'; // HDR-сцена для bloom
 const UBO_FLOATS = 36 + 12 + 32 + 32 + 4; // базовая часть + src[8] + камера/атмосфера/палитры
 
@@ -79,6 +80,9 @@ export class TerrainRenderer {
   private simBG!: GPUBindGroup;
   private renderPipeline!: GPURenderPipeline;
   private wallPipeline!: GPURenderPipeline;
+  private treePipeline!: GPURenderPipeline;
+  private rainPipeline!: GPURenderPipeline;
+  private rainVis = 0;
   private renderBG!: GPUBindGroup;
   private renderUBO!: GPUBuffer;
   private renderUBO2!: GPUBuffer; // «до» для split-view
@@ -102,7 +106,7 @@ export class TerrainRenderer {
   climate: ClimateId = 'temperate';
   /** DEV: флаги отладки шейдера (отключение каустики, пены). */
   dbg: [number, number] = [0, 0];
-  fx = { fog: 0.0035, bloom: 0.6, tod: 0.35 };
+  fx = { fog: 0.0035, bloom: 0.6, tod: 0.35, trees: 1 };
 
   // освещение: тени + AO (compute), считаются при смене рельефа или солнца
   private lightBuf!: GPUBuffer;
@@ -168,6 +172,11 @@ export class TerrainRenderer {
   private pitch = 0.55;
   private dist = 140;
   private target: Vec3 = [0, 4, 0];
+  private yawV = 0;
+  private pitchV = 0;
+  private zoomV = 0;
+  private dragging = false;
+  private focusGoal: Vec3 | null = null;
 
   // cinematic
   cineKeys: CamKey[] = [];
@@ -363,6 +372,24 @@ export class TerrainRenderer {
       primitive: { topology: 'triangle-strip', cullMode: 'none' },
       depthStencil,
     });
+    this.treePipeline = d.createRenderPipeline({
+      layout,
+      vertex: { module, entryPoint: 'vsTree' },
+      fragment: { module, entryPoint: 'fsTree', targets: [{ format: SCENE_FMT }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil,
+    });
+    const blend: GPUBlendState = {
+      color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+      alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+    };
+    this.rainPipeline = d.createRenderPipeline({
+      layout,
+      vertex: { module, entryPoint: 'vsRain' },
+      fragment: { module, entryPoint: 'fsRain', targets: [{ format: SCENE_FMT, blend }] },
+      primitive: { topology: 'line-list' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less' },
+    });
     this.skyPipeline = d.createRenderPipeline({
       layout,
       vertex: { module, entryPoint: 'vsSky' },
@@ -429,8 +456,8 @@ export class TerrainRenderer {
     const warm = 1 - sm(4, 24, elDeg);
     const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
     const col: Vec3 = [lerp(1, 1, warm), lerp(0.95, 0.5, warm), lerp(0.85, 0.25, warm)];
-    const intensity = lerp(0.45, 1.0, sm(2, 30, elDeg));
-    const bright = 0.55 + 0.45 * sm(0, 18, elDeg);
+    const intensity = lerp(0.7, 1.0, sm(2, 30, elDeg));
+    const bright = 0.75 + 0.25 * sm(0, 18, elDeg);
     return { dir, col, intensity, warm, bright };
   }
 
@@ -933,6 +960,10 @@ export class TerrainRenderer {
       if (pan) mode = 'pan';
       else if (this.tool !== 'orbit' && e.button === 0) mode = 'tool';
       drag = { x: e.clientX, y: e.clientY, mode };
+      this.dragging = true;
+      this.yawV = 0;
+      this.pitchV = 0;
+      this.focusGoal = null;
       c.setPointerCapture(e.pointerId);
       this.pickReq = this.rayFromClient(e.clientX, e.clientY);
       if (mode === 'tool') this.toolPress();
@@ -940,6 +971,7 @@ export class TerrainRenderer {
     c.addEventListener('pointerup', () => {
       if (drag?.mode === 'tool') this.toolRelease();
       drag = null;
+      this.dragging = false;
     });
     c.addEventListener('pointerleave', () => {
       if (!drag) this.hit.valid = false;
@@ -960,12 +992,18 @@ export class TerrainRenderer {
       } else {
         this.yaw -= dx * 0.005;
         this.pitch = Math.min(1.5, Math.max(0.05, this.pitch + dy * 0.005));
+        this.yawV = -dx * 0.005;
+        this.pitchV = dy * 0.005;
       }
     });
     c.addEventListener('wheel', (e) => {
       e.preventDefault();
-      this.dist = Math.min(400, Math.max(20, this.dist * Math.exp(e.deltaY * 0.001)));
+      this.zoomV = Math.max(-0.12, Math.min(0.12, this.zoomV + e.deltaY * 0.0003));
     }, { passive: false });
+    c.addEventListener('dblclick', () => {
+      if (!this.hit.valid) return;
+      this.focusGoal = [cellToWorld(this.hit.x), this.hit.h * this.params.heightScale, cellToWorld(this.hit.y)];
+    });
     c.addEventListener('contextmenu', (e) => e.preventDefault());
     new ResizeObserver(() => this.resize()).observe(c);
   }
@@ -1037,8 +1075,37 @@ export class TerrainRenderer {
     pass.end();
   }
 
+  private stepCamera() {
+    if (this.cine.playing) return;
+    if (!this.dragging && (Math.abs(this.yawV) > 1e-5 || Math.abs(this.pitchV) > 1e-5)) {
+      this.yaw += this.yawV;
+      this.pitch = Math.min(1.5, Math.max(0.05, this.pitch + this.pitchV));
+      this.yawV *= 0.93;
+      this.pitchV *= 0.93;
+    }
+    if (Math.abs(this.zoomV) > 1e-4) {
+      this.dist = Math.min(400, Math.max(20, this.dist * Math.exp(this.zoomV)));
+      this.zoomV *= 0.82;
+    }
+    if (this.focusGoal) {
+      let d = 0;
+      for (let k = 0; k < 3; k++) {
+        const diff = this.focusGoal[k] - this.target[k];
+        this.target[k] += diff * 0.14;
+        d += Math.abs(diff);
+      }
+      if (d < 0.02) this.focusGoal = null;
+    }
+  }
+
+  /** Клетка под курсором: высота (0..1) и мировые координаты — для HUD. */
+  hover(): { valid: boolean; h: number; x: number; y: number } {
+    return { valid: this.hit.valid, h: this.hit.h, x: this.hit.x, y: this.hit.y };
+  }
+
   private frame() {
     this.resize();
+    this.stepCamera();
     const p = this.params;
     const g = this.geo;
     const enc = this.device.createCommandEncoder();
@@ -1131,7 +1198,10 @@ export class TerrainRenderer {
     const ovMode = { none: 0, erosion: 1, velocity: 2, diff: 3 }[this.overlay];
     const u = new Float32Array(UBO_FLOATS);
     u.set(vp, 0);
-    u.set([eye[0], eye[1], eye[2], 0], 16);
+    const rainTarget = this.running && this.sim?.rainOn && this.scrub === null ? 1 : 0;
+    this.rainVis += (rainTarget - this.rainVis) * 0.04;
+    if (Math.abs(rainTarget - this.rainVis) < 0.005) this.rainVis = rainTarget;
+    u.set([eye[0], eye[1], eye[2], this.rainVis], 16);
     u.set([GRID, p.heightScale, p.seaLevel, WORLD], 20);
     const sun = this.sunState();
     u.set([sun.dir[0], sun.dir[1], sun.dir[2], 0], 24);
@@ -1158,7 +1228,8 @@ export class TerrainRenderer {
       u.set([f[0], f[1], f[2], aspect], 80);
       u.set([right[0], right[1], right[2], 0], 84);
       u.set([up[0], up[1], up[2], Math.tan(FOV / 2)], 88);
-      u.set([this.fx.fog, this.dbg[0], this.dbg[1], 0], 92);
+      const treeK = { temperate: 1, arid: 0.3, monsoon: 1.4 }[this.climate] ?? 1;
+      u.set([this.fx.fog, this.dbg[0], this.dbg[1], this.fx.trees * treeK], 92);
       const warmH: Vec3 = [0.76, 0.4, 0.22];
       const warmZ: Vec3 = [0.17, 0.11, 0.3];
       const mixv = (a: number[], b: number[], t: number, k: number) => a.map((v, n) => (v + (b[n] - v) * t) * k);
@@ -1204,6 +1275,9 @@ export class TerrainRenderer {
       pass.setPipeline(this.renderPipeline);
       pass.setBindGroup(0, bg);
       pass.draw((GRID - 1) * (GRID - 1) * 6);
+      pass.setPipeline(this.treePipeline);
+      pass.setBindGroup(0, bg);
+      pass.draw(30, TREE_CANDIDATES);
       // стенки: diorama (все 4) или только плоскость среза (инстанс 3)
       if (g.diorama || cutActive) {
         pass.setPipeline(this.wallPipeline);
@@ -1222,6 +1296,12 @@ export class TerrainRenderer {
       drawScene(afterBG); // справа — «после»
     } else {
       drawScene(afterBG);
+    }
+    if (this.rainVis > 0.01) {
+      pass.setScissorRect(0, 0, this.canvas.width, this.canvas.height);
+      pass.setPipeline(this.rainPipeline);
+      pass.setBindGroup(0, this.renderBG);
+      pass.draw(2, 4000);
     }
     pass.end();
     this.device.queue.writeBuffer(this.postUbo[3], 0, new Float32Array([this.fx.bloom, 0.35, 0, 0]));

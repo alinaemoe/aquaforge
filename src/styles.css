@@ -96,3 +96,15 @@ button.icon:disabled { opacity: .35; cursor: default; }
 .toast b { color: var(--accent); letter-spacing: .06em; font-size: 12px; }
 .toast span { font-size: 12px; line-height: 1.4; }
 @keyframes toastIn { from { opacity: 0; transform: translate(-50%, -10px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* сворачиваемые секции панели */
+.panel h3 { cursor: pointer; user-select: none; }
+.panel h3::after { content: '▾'; float: right; opacity: 0.5; transition: transform 0.2s; }
+.panel h3.closed::after { transform: rotate(-90deg); }
+.panel .folded { display: none !important; }
+.panel.hidden { transform: translateX(-110%); opacity: 0; pointer-events: none; }
+.hover {
+  position: fixed; right: 16px; bottom: 112px; padding: 4px 10px; border-radius: 8px;
+  font: 12px/1.4 ui-monospace, monospace; color: #bfefff; background: rgba(10, 20, 32, 0.6);
+  border: 1px solid rgba(80, 220, 255, 0.25); pointer-events: none; backdrop-filter: blur(6px);
+}
