@@ -8,7 +8,7 @@ Written in raw WebGPU + WGSL (no Three.js or any 3D framework), React + TypeScri
 
 <p align="center"><img src="docs/screenshots/erosion.gif" alt="Rain carves a procedurally generated island while the camera orbits" width="100%"></p>
 
-<p align="center"><sub>512x512 heightfield, rain eroding a fresh island under a slow camera orbit.</sub></p>
+<p align="center"><sub>512x512 heightfield, a fresh island eroded by rain: 96 frames of 55 simulation steps each (~5,300 steps, ~260,000 simulated years) under an eased camera orbit. Frames were captured offline by stepping the sim, so the GIF is smooth regardless of capture speed.</sub></p>
 
 ### What is interesting here
 
